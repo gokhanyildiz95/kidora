@@ -1,0 +1,22 @@
+{
+  "name": "kidora",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Kreşler için veli odaklı yönetim platformu",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@kidora/server & npm run dev --workspace=@kidora/web",
+    "dev:server": "npm run dev --workspace=@kidora/server",
+    "dev:web": "npm run dev --workspace=@kidora/web",
+    "build": "npm run build --workspace=@kidora/server && npm run build --workspace=@kidora/web",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:setup": "npm run db:setup --workspace=@kidora/server"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

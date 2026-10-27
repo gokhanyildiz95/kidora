@@ -1,0 +1,284 @@
+// Kidora veri modeli.
+// Geliştirmede SQLite kullanılır; production için provider "postgresql" yapılır.
+// SQLite enum desteklemediği için durum alanları String tutulur ve @kidora/shared içindeki
+// zod şemalarıyla doğrulanır.
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model School {
+  id             String      @id @default(cuid())
+  name           String
+  address        String?
+  phone          String?
+  timezone       String      @default("Europe/Istanbul")
+  /// When true, Saturdays and Sundays count as closed days
+  weekendsClosed Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  holidays       Holiday[]
+  users          User[]
+  classrooms     Classroom[]
+  children       Child[]
+}
+
+model User {
+  id                  String           @id @default(cuid())
+  schoolId            String
+  school              School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  email               String           @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  phone               String?
+  /// ADMIN | TEACHER | PARENT
+  role                String
+  locale              String           @default("tr")
+  isActive            Boolean          @default(true)
+  lastLoginAt         DateTime?
+  /// Parents: newest feed item they have seen in the notification bell
+  notificationsSeenAt DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  classrooms          ClassroomStaff[]
+  children            ChildGuardian[]
+  checkIns            Attendance[]     @relation("CheckInBy")
+  checkOuts           Attendance[]     @relation("CheckOutBy")
+  activities          Activity[]       @relation("ActivityBy")
+  messages            Message[]
+  threadReads         ThreadRead[]
+  acknowledged        Activity[]       @relation("ActivityAck")
+  auditLogs           AuditLog[]
+
+  @@index([schoolId, role])
+}
+
+model Classroom {
+  id        String           @id @default(cuid())
+  schoolId  String
+  school    School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String
+  ageGroup  String?
+  color     String           @default("#FF8A65")
+  emoji     String           @default("🐣")
+  capacity  Int              @default(16)
+  ratio     Int              @default(8)
+  createdAt DateTime         @default(now())
+  staff     ClassroomStaff[]
+  children  Child[]
+
+  @@index([schoolId])
+}
+
+model ClassroomStaff {
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([classroomId, userId])
+}
+
+model Child {
+  id                String             @id @default(cuid())
+  schoolId          String
+  school            School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classroomId       String?
+  classroom         Classroom?         @relation(fields: [classroomId], references: [id], onDelete: SetNull)
+  firstName         String
+  lastName          String
+  birthDate         DateTime
+  /// FEMALE | MALE | OTHER
+  gender            String?
+  photoUrl          String?
+  allergies         String?
+  medicalNotes      String?
+  dietaryNotes      String?
+  notes             String?
+  photoConsent      Boolean            @default(true)
+  /// ACTIVE | INACTIVE
+  status            String             @default("ACTIVE")
+  enrolledAt        DateTime           @default(now())
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  guardians         ChildGuardian[]
+  pickupPeople      PickupPerson[]
+  emergencyContacts EmergencyContact[]
+  attendance        Attendance[]
+  activities        Activity[]
+  messages          Message[]
+  threadReads       ThreadRead[]
+  medicationPlans   MedicationPlan[]
+
+  @@index([schoolId, classroomId])
+}
+
+model ChildGuardian {
+  childId      String
+  child        Child   @relation(fields: [childId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  relationship String
+  isPrimary    Boolean @default(false)
+
+  @@id([childId, userId])
+}
+
+model PickupPerson {
+  id           String   @id @default(cuid())
+  childId      String
+  child        Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  fullName     String
+  relationship String
+  phone        String?
+  photoUrl     String?
+  notes        String?
+  createdAt    DateTime @default(now())
+}
+
+model EmergencyContact {
+  id           String @id @default(cuid())
+  childId      String
+  child        Child  @relation(fields: [childId], references: [id], onDelete: Cascade)
+  fullName     String
+  relationship String
+  phone        String
+}
+
+/// One row per child per calendar day (in the school's time zone).
+model Attendance {
+  id           String    @id @default(cuid())
+  childId      String
+  child        Child     @relation(fields: [childId], references: [id], onDelete: Cascade)
+  /// YYYY-MM-DD in the school's time zone
+  date         String
+  /// PRESENT | CHECKED_OUT | ABSENT
+  status       String
+  checkInAt    DateTime?
+  checkInById  String?
+  checkInBy    User?     @relation("CheckInBy", fields: [checkInById], references: [id], onDelete: SetNull)
+  droppedOffBy String?
+  checkOutAt   DateTime?
+  checkOutById String?
+  checkOutBy   User?     @relation("CheckOutBy", fields: [checkOutById], references: [id], onDelete: SetNull)
+  pickedUpBy   String?
+  absenceNote  String?
+  note         String?
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([childId, date])
+  @@index([date])
+}
+
+/// One entry in a child's daily feed: a meal, nap, diaper change, mood, medication, incident…
+model Activity {
+  id               String    @id @default(cuid())
+  schoolId         String
+  childId          String
+  child            Child     @relation(fields: [childId], references: [id], onDelete: Cascade)
+  /// YYYY-MM-DD in the school's time zone
+  date             String
+  /// MEAL | NAP | TOILET | MOOD | MEDICATION | INCIDENT | PLAY | NOTE
+  type             String
+  occurredAt       DateTime
+  /// Type-specific fields as JSON, validated by activityDataSchemas in @kidora/shared
+  data             String    @default("{}")
+  note             String?
+  createdById      String?
+  createdBy        User?     @relation("ActivityBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// Incidents need a parent's acknowledgement
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+  acknowledgedBy   User?     @relation("ActivityAck", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  createdAt        DateTime  @default(now())
+
+  @@index([childId, date])
+  @@index([schoolId, date])
+}
+
+/// A day or range of days the school is closed (inclusive, YYYY-MM-DD in the school's time zone).
+model Holiday {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String
+  startDate String
+  endDate   String
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, startDate])
+}
+
+/// One message in a child's conversation between the family and the school.
+model Message {
+  id         String   @id @default(cuid())
+  schoolId   String
+  childId    String
+  child      Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  senderId   String?
+  sender     User?    @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  /// ADMIN | TEACHER | PARENT at the time of sending
+  senderRole String
+  /// Key from MESSAGE_TEMPLATES in @kidora/shared; the client renders the localized phrase
+  template   String
+  /// Optional HH:MM for timed phrases
+  time       String?
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@index([childId, createdAt])
+  @@index([schoolId, createdAt])
+}
+
+/// Up to when a user has read a child's conversation.
+model ThreadRead {
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  childId    String
+  child      Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  lastReadAt DateTime
+
+  @@id([userId, childId])
+}
+
+/// A medicine the school should give at set times between two dates (the parent's authorization).
+model MedicationPlan {
+  id           String   @id @default(cuid())
+  schoolId     String
+  childId      String
+  child        Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  name         String
+  dose         String
+  /// Comma-separated HH:MM times, e.g. "09:00,13:00"
+  times        String
+  /// YYYY-MM-DD, inclusive
+  startDate    String
+  endDate      String
+  instructions String?
+  createdById  String?
+  /// ADMIN | TEACHER | PARENT
+  createdRole  String
+  createdAt    DateTime @default(now())
+
+  @@index([childId, endDate])
+  @@index([schoolId, endDate])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  schoolId  String
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String
+  entityId  String?
+  meta      String?
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+}
